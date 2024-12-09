@@ -31,3 +31,7 @@ dependencies:
     - requests==2.24.0
     - -e git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers
     - -e git+https://github.com/openai/CLIP.git@main#egg=clip
+    - torchattacks
+    - pillow
+    - tqdm
+    - matplotlib

@@ -1,1 +1,6 @@
 __pycache__
+models/
+output*
+precomputed_feats/
+src/
+data*/

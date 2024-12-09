@@ -1,4 +1,5 @@
-import argparse, os
+import os
+import argparse
 import torch
 import numpy as np
 from omegaconf import OmegaConf
@@ -7,6 +8,7 @@ from einops import rearrange
 from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
+from transformers import logging
 import copy
 
 from ldm.util import instantiate_from_config
@@ -17,23 +19,32 @@ import torch.nn.functional as F
 import time
 import pickle
 
+logging.set_verbosity_error()
+
 feat_maps = []
+
 
 def save_img_from_sample(model, samples_ddim, fname):
     x_samples_ddim = model.decode_first_stage(samples_ddim)
     x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
     x_samples_ddim = x_samples_ddim.cpu().permute(0, 2, 3, 1).numpy()
     x_image_torch = torch.from_numpy(x_samples_ddim).permute(0, 3, 1, 2)
-    x_sample = 255. * rearrange(x_image_torch[0].cpu().numpy(), 'c h w -> h w c')
+    x_sample = 255.0 * rearrange(x_image_torch[0].cpu().numpy(), 'c h w -> h w c')
     img = Image.fromarray(x_sample.astype(np.uint8))
     img.save(fname)
 
+
 def feat_merge(opt, cnt_feats, sty_feats, start_step=0):
-    feat_maps = [{'config': {
-                'gamma':opt.gamma,
-                'T':opt.T,
-                'timestep':_,
-                }} for _ in range(50)]
+    feat_maps = [
+        {
+            'config': {
+                'gamma': opt.gamma,
+                'T': opt.T,
+                'timestep': _,
+            },
+        }
+        for _ in range(50)
+    ]
 
     for i in range(len(feat_maps)):
         if i < (50 - start_step):
@@ -55,20 +66,24 @@ def load_img(path):
     x, y = image.size
     print(f"Loaded input image of size ({x}, {y}) from {path}")
     h = w = 512
-    image = transforms.CenterCrop(min(x,y))(image)
+    image = transforms.CenterCrop(min(x, y))(image)
     image = image.resize((w, h), resample=Image.Resampling.LANCZOS)
     image = np.array(image).astype(np.float32) / 255.0
     image = image[None].transpose(0, 3, 1, 2)
     image = torch.from_numpy(image)
-    return 2.*image - 1.
+    return 2.0 * image - 1.0
+
 
 def adain(cnt_feat, sty_feat):
-    cnt_mean = cnt_feat.mean(dim=[0, 2, 3],keepdim=True)
-    cnt_std = cnt_feat.std(dim=[0, 2, 3],keepdim=True)
-    sty_mean = sty_feat.mean(dim=[0, 2, 3],keepdim=True)
-    sty_std = sty_feat.std(dim=[0, 2, 3],keepdim=True)
-    output = ((cnt_feat-cnt_mean)/cnt_std)*sty_std + sty_mean
+    # print(cnt_feat.shape)  # (1, 4, 64, 64)
+    # print(sty_feat.shape)  # (1, 4, 64, 64)
+    cnt_mean = cnt_feat.mean(dim=[0, 2, 3], keepdim=True)
+    cnt_std = cnt_feat.std(dim=[0, 2, 3], keepdim=True)
+    sty_mean = sty_feat.mean(dim=[0, 2, 3], keepdim=True)
+    sty_std = sty_feat.std(dim=[0, 2, 3], keepdim=True)
+    output = ((cnt_feat - cnt_mean) / cnt_std) * sty_std + sty_mean
     return output
+
 
 def load_model_from_config(config, ckpt, verbose=False):
     print(f"Loading model from {ckpt}")
@@ -89,10 +104,11 @@ def load_model_from_config(config, ckpt, verbose=False):
     model.eval()
     return model
 
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--cnt', default = './data/cnt')
-    parser.add_argument('--sty', default = './data/sty')
+    parser.add_argument('--cnt', default='./data/cnt')
+    parser.add_argument('--sty', default='./data/sty')
     parser.add_argument('--ddim_inv_steps', type=int, default=50, help='DDIM eta')
     parser.add_argument('--save_feat_steps', type=int, default=50, help='DDIM eta')
     parser.add_argument('--start_step', type=int, default=49, help='DDIM eta')
@@ -120,7 +136,7 @@ def main():
     os.makedirs(output_path, exist_ok=True)
     if len(feat_path_root) > 0:
         os.makedirs(feat_path_root, exist_ok=True)
-    
+
     model_config = OmegaConf.load(f"{opt.model_config}")
     model = load_model_from_config(model_config, f"{opt.ckpt}")
 
@@ -132,7 +148,7 @@ def main():
     model = model.to(device)
     unet_model = model.model.diffusion_model
     sampler = DDIMSampler(model)
-    sampler.make_schedule(ddim_num_steps=ddim_steps, ddim_eta=opt.ddim_eta, verbose=False) 
+    sampler.make_schedule(ddim_num_steps=ddim_steps, ddim_eta=opt.ddim_eta, verbose=False)
     time_range = np.flip(sampler.ddim_timesteps)
     idx_time_dict = {}
     time_idx_dict = {}
@@ -144,10 +160,7 @@ def main():
     opt.seed = seed
 
     global feat_maps
-    feat_maps = [{'config': {
-                'gamma':opt.gamma,
-                'T':opt.T
-                }} for _ in range(50)]
+    feat_maps = [{'config': {'gamma': opt.gamma, 'T': opt.T}} for _ in range(50)]
 
     def ddim_sampler_callback(pred_x0, xt, i):
         save_feature_maps_callback(i)
@@ -168,7 +181,7 @@ def main():
             block_idx += 1
 
     def save_feature_maps_callback(i):
-        save_feature_maps(unet_model.output_blocks , i, "output_block")
+        save_feature_maps(unet_model.output_blocks, i, "output_block")
 
     def save_feature_map(feature_map, filename, time):
         global feat_maps
@@ -176,7 +189,7 @@ def main():
         feat_maps[cur_idx][f"{filename}"] = feature_map
 
     start_step = opt.start_step
-    precision_scope = autocast if opt.precision=="autocast" else nullcontext
+    precision_scope = autocast if opt.precision == "autocast" else nullcontext
     uc = model.get_learned_conditioning([""])
     shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
     sty_img_list = sorted(os.listdir(opt.sty))
@@ -197,13 +210,16 @@ def main():
                 sty_z_enc = torch.clone(sty_feat[0]['z_enc'])
         else:
             init_sty = model.get_first_stage_encoding(model.encode_first_stage(init_sty))
-            sty_z_enc, _ = sampler.encode_ddim(init_sty.clone(), num_steps=ddim_inversion_steps, unconditional_conditioning=uc, \
-                                                end_step=time_idx_dict[ddim_inversion_steps-1-start_step], \
-                                                callback_ddim_timesteps=save_feature_timesteps,
-                                                img_callback=ddim_sampler_callback)
+            sty_z_enc, _ = sampler.encode_ddim(
+                init_sty.clone(),
+                num_steps=ddim_inversion_steps,
+                unconditional_conditioning=uc,
+                end_step=time_idx_dict[ddim_inversion_steps - 1 - start_step],
+                callback_ddim_timesteps=save_feature_timesteps,
+                img_callback=ddim_sampler_callback,
+            )
             sty_feat = copy.deepcopy(feat_maps)
             sty_z_enc = feat_maps[0]['z_enc']
-
 
         for cnt_name in cnt_img_list:
             cnt_name_ = os.path.join(opt.cnt, cnt_name)
@@ -219,10 +235,14 @@ def main():
                     cnt_z_enc = torch.clone(cnt_feat[0]['z_enc'])
             else:
                 init_cnt = model.get_first_stage_encoding(model.encode_first_stage(init_cnt))
-                cnt_z_enc, _ = sampler.encode_ddim(init_cnt.clone(), num_steps=ddim_inversion_steps, unconditional_conditioning=uc, \
-                                                    end_step=time_idx_dict[ddim_inversion_steps-1-start_step], \
-                                                    callback_ddim_timesteps=save_feature_timesteps,
-                                                    img_callback=ddim_sampler_callback)
+                cnt_z_enc, _ = sampler.encode_ddim(
+                    init_cnt.clone(),
+                    num_steps=ddim_inversion_steps,
+                    unconditional_conditioning=uc,
+                    end_step=time_idx_dict[ddim_inversion_steps - 1 - start_step],
+                    callback_ddim_timesteps=save_feature_timesteps,
+                    img_callback=ddim_sampler_callback,
+                )
                 cnt_feat = copy.deepcopy(feat_maps)
                 cnt_z_enc = feat_maps[0]['z_enc']
 
@@ -242,22 +262,23 @@ def main():
                             feat_maps = None
 
                         # inference
-                        samples_ddim, intermediates = sampler.sample(S=ddim_steps,
-                                                        batch_size=1,
-                                                        shape=shape,
-                                                        verbose=False,
-                                                        unconditional_conditioning=uc,
-                                                        eta=opt.ddim_eta,
-                                                        x_T=adain_z_enc,
-                                                        injected_features=feat_maps,
-                                                        start_step=start_step,
-                                                        )
+                        samples_ddim, intermediates = sampler.sample(
+                            S=ddim_steps,
+                            batch_size=1,
+                            shape=shape,
+                            verbose=False,
+                            unconditional_conditioning=uc,
+                            eta=opt.ddim_eta,
+                            x_T=adain_z_enc,
+                            injected_features=feat_maps,
+                            start_step=start_step,
+                        )
 
                         x_samples_ddim = model.decode_first_stage(samples_ddim)
                         x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
                         x_samples_ddim = x_samples_ddim.cpu().permute(0, 2, 3, 1).numpy()
                         x_image_torch = torch.from_numpy(x_samples_ddim).permute(0, 3, 1, 2)
-                        x_sample = 255. * rearrange(x_image_torch[0].cpu().numpy(), 'c h w -> h w c')
+                        x_sample = 255.0 * rearrange(x_image_torch[0].cpu().numpy(), 'c h w -> h w c')
                         img = Image.fromarray(x_sample.astype(np.uint8))
 
                         img.save(os.path.join(output_path, output_name))
@@ -271,6 +292,7 @@ def main():
                                     pickle.dump(sty_feat, h)
 
     print(f"Total end: {time.time() - begin}")
+
 
 if __name__ == "__main__":
     main()
